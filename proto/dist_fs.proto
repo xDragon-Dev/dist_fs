@@ -1,0 +1,18 @@
+syntax = "proto3";
+package dist_fs;
+
+//Petición del cliente para el servidor, nombre que quiere saludar
+message ClientRequest {
+    string name = 1;
+}
+
+//Respuesta del servidor para el cliente, mesaje de saludo
+message ServerResponse {
+    string message = 1;
+}
+
+//Servicio para mandar saludos, claro que si
+service Greeting {
+    //Dice hola al nombre que le pases
+    rpc SayHello(ClientRequest) returns (ServerResponse);
+}
