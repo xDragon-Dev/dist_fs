@@ -1,18 +1,20 @@
 syntax = "proto3";
 package dist_fs;
 
-//Petición del cliente para el servidor, nombre que quiere saludar
-message ClientRequest {
-    string name = 1;
+//Client message that specifies data about a file namechange
+message FileData {
+  string filename = 1;
+  string file_path = 2;
+  bytes content = 3;
 }
 
-//Respuesta del servidor para el cliente, mesaje de saludo
-message ServerResponse {
-    string message = 1;
+//Response after transferin a file to a server
+message FileUploadResponse {
+    string response = 1;
 }
 
-//Servicio para mandar saludos, claro que si
-service Greeting {
-    //Dice hola al nombre que le pases
-    rpc SayHello(ClientRequest) returns (ServerResponse);
+//Service related to all file operations (Transfer, Create, Delete, Rename, Update)
+service FileSystem {
+    //Transfer a file to a server
+    rpc TransferFile(FileData) returns (FileUploadResponse);
 }
