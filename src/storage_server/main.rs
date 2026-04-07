@@ -6,13 +6,13 @@ use dist_fs_proto_buf::upload_chunk::Data;
 use dist_fs_proto_buf::{AssignedNode, DownloadResponse, UploadChunk};
 
 use tokio::fs::File;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::sync::mpsc;
+
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::ReceiverStream;
 
 use tonic::{Request, Response, Status, Streaming};
-
-use crate::dist_fs_proto_buf::UploadHeader;
 
 struct Storage;
 
@@ -22,52 +22,44 @@ impl StorageService for Storage {
         &self,
         request: Request<Streaming<UploadChunk>>,
     ) -> Result<Response<()>, Status> {
-        let mut inner = request.into_inner();
-        let header: UploadHeader;
-
-        match inner.next().await {
-            Some(chunk_result) => {
-                let header_chunk = chunk_result?;
-                match header_chunk.data {
-                    Some(data) => {
-                        header = match data {
-                            Data::Header(upload_header) => upload_header,
-                            Data::Content(_) => {
-                                return Err(Status::invalid_argument(
-                                    "Header file must be sent first",
-                                ));
-                            }
-                        }
-                    }
-                    None => {return Err(Status::invalid_argument("Request body seems to be empty"));}
+        let mut streaming = request.into_inner();
+        let header = match streaming.next().await {
+            Some(chunk_result) => match chunk_result?.data {
+                Some(Data::Header(h)) => h,
+                _ => {
+                    return Err(Status::invalid_argument("File Header must be sent first"));
                 }
-            }
-            None => {
-                return Err(Status::invalid_argument("Request seems to be empty"));
-            }
-        }
+            },
+            None => return Err(Status::invalid_argument("Empty stream")),
+        };
+
+        // TODO: SE DDEBE COMPROBAR QUE LA ACCIÓN ES LEGAL CON "AUTH TOKEN"
+
+        // ! "TOTAL SIZE" PARECE SER INNUTIL, CONSIDERAR DESECHARLO (DEL HEADER)
+        // ! "FILE NAME" SER INNUTIL, CONSIDERAR DESECHARLO (DEL HEADER)
 
         println!(
             "recibiendo archivo {} ({} bytes), sobreescribir: {}",
-            header.file_name,header.total_size,header.overwrite
+            header.file_name, header.total_size, header.overwrite
         );
 
-        let mut file = File::create(header.file_name)
+        // TODO: El data server debe crear un UUID para nombrar el archivo, todavía falta
+        // TODO: Después enviarle a metadata server el UUID con el que lo guardé
+
+        // ! Todavía requiero una ruta alternativa cuando necesito "sobreescribir", eliminar el anterior o así está bien
+        let mut file = File::create("nombre_generado_por_mi_xd")
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
-        while let Some(chunk_result) = inner.next().await {
-            let chunk = chunk_result?;
-            if let Some(data) = chunk.data {
-                match data {
-                    Data::Header(_) => {
-                        return Err(Status::invalid_argument("Header cannot be sent more than once"));
-                    }
-                    Data::Content(data) => {
-                        file.write_all(&data)
-                            .await
-                            .map_err(|e| Status::internal(e.to_string()))?;
-                    }
+        while let Some(chunk_result) = streaming.next().await {
+            match chunk_result?.data {
+                Some(Data::Content(c)) => {
+                    file.write_all(&c)
+                        .await
+                        .map_err(|e| Status::internal(e.to_string()))?;
+                }
+                _ => {
+                    return Err(Status::invalid_argument("Expected file content"));
                 }
             }
         }
@@ -82,10 +74,63 @@ impl StorageService for Storage {
         &self,
         request: Request<AssignedNode>,
     ) -> Result<Response<Self::DownloadFileStream>, Status> {
-        Err(Status::aborted("Algo salió mal"))
+        /*
+        *NOTAS DE CAMBIOS!
+
+        eliminar "total size" de UploadHeader
+        eliminar "file name" de UploadHeader
+
+        eliminar "node id" de AssignedNode
+        eliminar "file id" de AssignedNode
+
+        la función remota "download_file" no requiere "Assigned Node" como argumento
+        Crear en su lugar un "DownloadRequest" que solo contenga "auth token"
+        */
+        // ! IPV4 PARECE SER INNUTIL, CONSIDERAR DESECHARLO (PARA ESTA REQUEST)
+        // ? "FILE ID" PODRÍA SER INUTIL SI SE TOMA DE DESICIÓN DE DISEÑO DE OBTENER EL FILE ID DESDE EL METADATA SERVER
+        // ! SE DEBE COMPROBAR QUE SE CONECTA AL NODO CORRECTO CON EL "NODE ID" O DESECHAR EL "NODE ID"
+        // TODO: SE DDEBE COMPROBAR QUE LA ACCIÓN ES LEGAL CON "AUTH TOKEN"
+
+        let (xs, xr) = mpsc::channel(10);
+        let inner = request.into_inner();
+
+        tokio::spawn(async move {
+            // TODO: Aquí debería hacer un método para pedirle al metadata server que archivo quiero abrir
+
+            let mut file = File::open(inner.file_id).await.unwrap();
+            let mut buffer = [0_u8; 4096];
+
+            let mut n: usize;
+            loop {
+                n = file.read(&mut buffer).await.unwrap();
+                if n == 0 {
+                    break;
+                }
+
+                let response = Ok(DownloadResponse {
+                    content: buffer[..n].to_vec(),
+                });
+
+                if xs.send(response).await.is_err() {
+                    break;
+                }
+            }
+        });
+
+        Ok(Response::new(ReceiverStream::new(xr)))
     }
 
     async fn delete_file(&self, request: Request<AssignedNode>) -> Result<Response<()>, Status> {
+        // ! IPV4 PARECE SER INNUTIL, CONSIDERAR DESECHARLO (PARA ESTA REQUEST)
+        // ? "FILE ID" PODRÍA SER INUTIL SI SE TOMA DE DESICIÓN DE DISEÑO DE OBTENER EL FILE ID DESDE EL METADATA SERVER
+        // ! SE DEBE COMPROBAR QUE SE CONECTA AL NODO CORRECTO CON EL "NODE ID" O DESECHAR EL "NODE ID"
+        // TODO: SE DDEBE COMPROBAR QUE LA ACCIÓN ES LEGAL CON "AUTH TOKEN"
+
+        let assigned_node = request.into_inner();
+        File::open(assigned_node.file_id)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
         Ok(Response::new(()))
     }
 }
